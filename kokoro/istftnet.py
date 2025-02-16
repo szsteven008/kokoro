@@ -20,14 +20,19 @@ def get_padding(kernel_size, dilation=1):
 class AdaIN1d(nn.Module):
     def __init__(self, style_dim, num_features):
         super().__init__()
-        self.norm = nn.InstanceNorm1d(num_features, affine=False)
+#        self.norm = nn.InstanceNorm1d(num_features, affine=False)
         self.fc = nn.Linear(style_dim, num_features*2)
+
+    def instance_norm(self, x):
+        mean = x.mean(dim=-1, keepdim=True)
+        std = x.std(dim=-1, unbiased=False, keepdim=True)
+        return (x - mean) / (std + 1e-5)
 
     def forward(self, x, s):
         h = self.fc(s)
         h = h.view(h.size(0), h.size(1), 1)
         gamma, beta = torch.chunk(h, chunks=2, dim=1)
-        return (1 + gamma) * self.norm(x) + beta
+        return (1 + gamma) * self.instance_norm(x) + beta
 
 
 class AdaINResBlock1(nn.Module):
@@ -75,7 +80,79 @@ class AdaINResBlock1(nn.Module):
             x = xt + x
         return x
 
+class TorchSTFT(nn.Module):
+    def __init__(self, filter_length=800, hop_length=200, win_length=800, window='hann'):
+        super().__init__()
+        self.filter_length = filter_length
+        self.hop_length = hop_length
+        self.win_length = win_length
 
+        scale = self.filter_length / self.hop_length
+        fourier_basis = np.fft.fft(np.eye(self.filter_length))
+
+        cutoff = int((self.filter_length / 2 + 1))
+        fourier_basis = np.vstack([np.real(fourier_basis[:cutoff, :]),
+                                   np.imag(fourier_basis[:cutoff, :])])
+
+        forward_basis = torch.FloatTensor(fourier_basis[:, None, :])
+        inverse_basis = torch.FloatTensor(
+            np.linalg.pinv(scale * fourier_basis).T[:, None, :])
+
+        # get window and zero center pad it to filter_length
+        fft_window = torch.from_numpy(get_window(window, win_length, fftbins=True).astype(np.float32))
+
+        # window the bases
+        forward_basis *= fft_window
+        inverse_basis *= fft_window
+
+        self.register_buffer('forward_basis', forward_basis.float())
+        self.register_buffer('inverse_basis', inverse_basis.float())
+
+    def transform(self, input_data):
+        # similar to librosa, reflect-pad the input
+        input_data = input_data.view(input_data.size(0), 1, input_data.size(1))
+        input_data = F.pad(
+            input_data,
+            (int(self.filter_length / 2), int(self.filter_length / 2), 0, 0),
+            mode='reflect')
+
+        forward_transform = F.conv1d(
+            input_data,
+            self.forward_basis, 
+            stride=self.hop_length,
+            padding=0)
+
+        cutoff = int((self.filter_length / 2) + 1)
+        real_part = forward_transform[:, :cutoff, :]
+        imag_part = forward_transform[:, cutoff:, :]
+
+        magnitude = torch.sqrt(real_part**2 + imag_part**2)
+        phase = torch.atan2(imag_part, real_part)
+
+        return magnitude, phase
+
+    def inverse(self, magnitude, phase):
+        recombine_magnitude_phase = torch.cat(
+            [magnitude*torch.cos(phase), magnitude*torch.sin(phase)], dim=1)
+
+        inverse_transform = F.conv_transpose1d(
+            recombine_magnitude_phase,
+            self.inverse_basis, 
+            stride=self.hop_length,
+            padding=0)
+        
+        # scale by hop ratio
+        inverse_transform *= float(self.filter_length) / self.hop_length
+        inverse_transform = inverse_transform[:, :, int(self.filter_length/2):]
+        inverse_transform = inverse_transform[:, :, :-int(self.filter_length/2):]
+        return inverse_transform
+
+    def forward(self, input_data):
+        magnitude, phase = self.transform(input_data)
+        reconstruction = self.inverse(magnitude, phase)
+        return reconstruction
+
+'''
 class TorchSTFT(nn.Module):
     def __init__(self, filter_length=800, hop_length=200, win_length=800, window='hann'):
         super().__init__()
@@ -101,7 +178,7 @@ class TorchSTFT(nn.Module):
         self.magnitude, self.phase = self.transform(input_data)
         reconstruction = self.inverse(self.magnitude, self.phase)
         return reconstruction
-
+'''
 
 class SineGen(nn.Module):
     """ Definition of sine generator

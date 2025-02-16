@@ -106,3 +106,34 @@ class KModel(torch.nn.Module):
         asr = t_en @ pred_aln_trg
         audio = self.decoder(asr, F0_pred, N_pred, ref_s[:, :128]).squeeze().cpu()
         return self.Output(audio=audio, pred_dur=pred_dur.cpu()) if return_output else audio
+
+    @torch.no_grad()
+    def inference(
+        self, 
+        input_ids: torch.LongTensor, 
+        ref_s: torch.FloatTensor,
+        speed: torch.IntTensor
+    ) :
+        input_lengths = input_ids.shape[-1]
+        text_mask = torch.arange(input_lengths).unsqueeze(0).type_as(input_ids)
+        text_mask = torch.gt(text_mask+1, input_lengths).to(self.device)
+        bert_dur = self.bert(input_ids, attention_mask=(~text_mask).int())
+        d_en = self.bert_encoder(bert_dur)
+        ref_s = ref_s.to(self.device)
+        s = ref_s[:, 128:]
+        d = self.predictor.text_encoder.inference(d_en, s, input_lengths, text_mask)
+        x, _ = self.predictor.lstm(d)
+        duration = self.predictor.duration_proj(x)
+        duration = torch.sigmoid(duration).sum(axis=-1) / speed
+        pred_dur = torch.round(duration).clamp(min=1).long()
+        pred_dur = pred_dur.view(-1)
+        indices = torch.repeat_interleave(torch.arange(input_ids.shape[1], device=self.device), pred_dur)
+        pred_aln_trg = torch.zeros((input_ids.shape[1], indices.shape[0]), device=self.device)
+        pred_aln_trg[indices, torch.arange(indices.shape[0])] = 1
+        pred_aln_trg = pred_aln_trg.unsqueeze(0).to(self.device)
+        en = d.transpose(-1, -2) @ pred_aln_trg
+        F0_pred, N_pred = self.predictor.F0Ntrain(en, s)
+        t_en = self.text_encoder.inference(input_ids, input_lengths, text_mask)
+        asr = t_en @ pred_aln_trg
+        audio = self.decoder(asr, F0_pred, N_pred, ref_s[:, :128]).squeeze(0).to(self.device)
+        return audio

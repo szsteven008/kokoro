@@ -68,6 +68,24 @@ class TextEncoder(nn.Module):
         x.masked_fill_(m, 0.0)
         return x
 
+    def inference(self, x, input_lengths, m):
+        x = self.embedding(x)  # [B, T, emb]
+        x = x.transpose(1, 2)  # [B, emb, T]
+        m = m.to(x.device).unsqueeze(1)
+        x.masked_fill_(m, 0.0)
+        for c in self.cnn:
+            x = c(x)
+            x.masked_fill_(m, 0.0)
+        x = x.transpose(1, 2)  # [B, T, chn]
+        self.lstm.flatten_parameters()
+        x, _ = self.lstm(x)
+        x = x.transpose(-1, -2)
+        x_pad = torch.zeros([x.shape[0], x.shape[1], m.shape[-1]])
+        x_pad[:, :, :x.shape[-1]] = x
+        x = x_pad.to(x.device)
+        x.masked_fill_(m, 0.0)
+        return x
+
 
 class AdaLayerNorm(nn.Module):
     def __init__(self, style_dim, channels, eps=1e-5):
@@ -176,6 +194,26 @@ class DurationEncoder(nn.Module):
                 x = x_pad.to(x.device)
         return x.transpose(-1, -2)
 
+    def inference(self, x, style, text_lengths, m):
+        s = style.expand(x.shape[0], x.shape[1], -1)
+        x = torch.cat([x, s], axis=-1).transpose(0, 1)
+        x.masked_fill_(m.unsqueeze(-1).transpose(0, 1), 0.0)
+        x = x.transpose(0, 1)
+        for block in self.lstms:
+            if isinstance(block, AdaLayerNorm):
+                x = block(x.transpose(-1, -2), style).transpose(-1, -2)
+                x = torch.cat([x, s.transpose(-1, -2)], axis=1)
+                x.masked_fill_(m.unsqueeze(-1).transpose(-1, -2), 0.0)
+                x = x.transpose(-1, -2)
+            else:
+                block.flatten_parameters()
+                x, _ = block(x)
+                x = F.dropout(x, p=self.dropout, training=False)
+                x = x.transpose(-1, -2)
+                x_pad = torch.zeros([x.shape[0], x.shape[1], m.shape[-1]])
+                x_pad[:, :, :x.shape[-1]] = x
+                x = x_pad.to(x.device)
+        return x    
 
 # https://github.com/yl4579/StyleTTS2/blob/main/Utils/PLBERT/util.py
 class CustomAlbert(AlbertModel):
