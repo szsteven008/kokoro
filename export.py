@@ -46,6 +46,7 @@ def export_onnx(model, output):
             'input_ids': { 1: 'input_ids_len' }, 
             'audio': { 1: 'num_samples' }, 
         }, 
+        do_constant_folding = True, 
     )
 
     print('export kokoro.onnx ok!')
