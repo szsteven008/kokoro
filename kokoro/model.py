@@ -127,9 +127,11 @@ class KModel(torch.nn.Module):
         duration = torch.sigmoid(duration).sum(axis=-1) / speed
         pred_dur = torch.round(duration).clamp(min=1).long()
         pred_dur = pred_dur.view(-1)
-        indices = torch.repeat_interleave(torch.arange(input_ids.shape[1], device=self.device), pred_dur)
-        pred_aln_trg = torch.zeros((input_ids.shape[1], indices.shape[0]), device=self.device)
-        pred_aln_trg[indices, torch.arange(indices.shape[0])] = 1
+        indices = pred_dur.cumsum(0)
+        start_indices = torch.cat([torch.zeros(1, device=self.device, dtype=indices.dtype), indices[:-1]])
+        idx = torch.arange(pred_dur.sum(), device=self.device).unsqueeze(0).repeat(indices.shape[0], 1)
+        pred_aln_trg = (idx >= start_indices.unsqueeze(1)) & (idx < indices.unsqueeze(1))
+        pred_aln_trg = pred_aln_trg.float()
         pred_aln_trg = pred_aln_trg.unsqueeze(0).to(self.device)
         en = d.transpose(-1, -2) @ pred_aln_trg
         F0_pred, N_pred = self.predictor.F0Ntrain(en, s)
