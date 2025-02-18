@@ -4,6 +4,7 @@ import torch
 import onnx
 import onnxruntime as ort
 import sounddevice as sd
+from onnxsim import simplify
 
 from kokoro import KModel, KPipeline
 
@@ -54,6 +55,13 @@ def export_onnx(model, output):
     onnx_model = onnx.load(onnx_file)
     onnx.checker.check_model(onnx_model)
     print('onnx check ok!')
+
+    # load your predefined ONNX model
+    onnx_model = onnx.load(onnx_file)
+    # convert model
+    model_simp, check = simplify(onnx_model)
+    onnx.save(model_simp, onnx_file)
+    assert check, "Simplified ONNX model could not be validated"
 
 def load_input_ids(pipeline, text):
     if pipeline.lang_code in 'ab':
