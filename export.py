@@ -23,11 +23,11 @@ def export_onnx(model, output):
         export_params = True, 
         verbose = True, 
         input_names = [ 'input_ids', 'style', 'speed' ], 
-        output_names = [ 'audio' ],
+        output_names = [ 'waveform' ],
         opset_version = 17, 
         dynamic_axes = {
             'input_ids': { 1: 'input_ids_len' }, 
-            'audio': { 1: 'num_samples' }, 
+            'waveform': { 1: 'num_samples' }, 
         }, 
         do_constant_folding = True, 
     )
