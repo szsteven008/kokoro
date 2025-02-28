@@ -23,11 +23,11 @@ def export_onnx(model, output):
         export_params = True, 
         verbose = True, 
         input_names = [ 'input_ids', 'style', 'speed' ], 
-        output_names = [ 'waveform' ],
+        output_names = [ 'waveform', 'duration' ],
         opset_version = 17, 
         dynamic_axes = {
             'input_ids': { 1: 'input_ids_len' }, 
-            'waveform': { 1: 'num_samples' }, 
+            'waveform': { 0: 'num_samples' }, 
         }, 
         do_constant_folding = True, 
     )
@@ -45,7 +45,7 @@ def load_input_ids(pipeline, text):
             if not ps:
                 continue
     else:
-        ps = pipeline.g2p(text)
+        ps, _ = pipeline.g2p(text)
 
     if len(ps) > 510:
         ps = ps[:510]
@@ -69,11 +69,11 @@ def load_sample(model):
     '''
     voice = 'checkpoints/voices/af_heart.pt'
 
-#    pipeline = KPipeline(lang_code='z', model=model.kmodel, device='cpu')
-#    text = '''
-#    2月15日晚，猫眼专业版数据显示，截至发稿，《哪吒之魔童闹海》（或称《哪吒2》）今日票房已达7.8亿元，累计票房（含预售）超过114亿元。
-#    '''
-#    voice = 'checkpoints/voices/zf_xiaoxiao.pt'
+    pipeline = KPipeline(lang_code='z', model=model.kmodel, device='cpu')
+    text = '''
+    2月15日晚，猫眼专业版数据显示，截至发稿，《哪吒之魔童闹海》（或称《哪吒2》）今日票房已达7.8亿元，累计票房（含预售）超过114亿元。
+    '''
+    voice = 'checkpoints/voices/zf_xiaoxiao.pt'
 
     phonemes, input_ids = load_input_ids(pipeline, text)
     style = load_voice(pipeline, voice, phonemes)
@@ -97,18 +97,19 @@ def inference_onnx(model, output):
     print(f'output: {output.shape}')
     print(output)
 
-    audio = output[0].numpy()
+    audio = output.numpy()
     sd.play(audio, 24000)
     sd.wait()
 
 def check_model(model):
     input_ids, style, speed = load_sample(model)
-    output = model(input_ids, style, speed)
+    output, duration = model(input_ids, style, speed)
 
     print(f'output: {output.shape}')
+    print(f'duration: {duration.shape}')
     print(output)
 
-    audio = output[0].numpy()
+    audio = output.numpy()
     sd.play(audio, 24000)
     sd.wait()
 
@@ -136,7 +137,7 @@ if __name__ == "__main__":
     # make dir
     os.makedirs(output_dir, exist_ok=True)
 
-    kmodel = KModel(config_file, checkpoint_path, disable_complex=True)
+    kmodel = KModel(config=config_file, model=checkpoint_path, disable_complex=True)
     model = KModelForONNX(kmodel).eval()
 
     if args.inference:
